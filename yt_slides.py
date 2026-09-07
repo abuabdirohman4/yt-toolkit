@@ -58,6 +58,62 @@ def grab_at(video, secs, outdir, idx):
     return out if out.exists() else None
 
 
+def sharpness(img):
+    """Kekuatan tepi gambar — makin tinggi, makin tajam.
+
+    Dipakai HANYA untuk membandingkan beberapa kandidat dari momen yang
+    berdekatan. Sebagai ambang mutlak angka ini menyesatkan: slide berlatar
+    polos wajar bernilai rendah walau tajam sempurna.
+    """
+    # `movie=` menanam path di dalam string filter, dan kurung/koma/titik-dua
+    # pada nama folder merusak sintaksnya (ffprobe gagal diam-diam, skor 0
+    # untuk semua kandidat). Jalankan dari dalam folder gambar dan sebut
+    # namanya saja, supaya karakter bermasalah tak pernah masuk filter.
+    img = Path(img)
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-f", "lavfi",
+         "-i", f"movie={img.name},format=gray,sobel,signalstats",
+         "-show_entries", "frame_tags=lavfi.signalstats.YAVG",
+         "-of", "csv=p=0"],
+        capture_output=True, text=True, cwd=str(img.parent)).stdout.strip()
+    try:
+        return float(out.splitlines()[0].rstrip(","))
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def grab_sharpest(video, secs, outdir, idx, window, limit):
+    """Ambil frame paling tajam di sekitar `secs`, bukan tepat di detik itu.
+
+    Sampling berkala bisa jatuh persis saat transisi (whip pan / flip)
+    berlangsung, menghasilkan gambar kabur. Beberapa kandidat berjarak dekat
+    dicoba, lalu yang paling tajam dipakai.
+    """
+    best_img, best_score = None, -1.0
+    tmp = outdir / f"_probe_{idx:03d}.jpg"
+    for off in (0.0, window, -window, window * 2):
+        t = secs + off
+        if t < 0 or (limit and t >= limit):
+            continue
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-y", "-ss", f"{t:.2f}", "-i", str(video),
+             "-vframes", "1", "-q:v", "3", str(tmp)],
+            capture_output=True, check=False)
+        if not tmp.exists():
+            continue
+        score = sharpness(tmp)
+        if score > best_score:
+            best_score, best_img = score, (t, tmp.read_bytes())
+
+    tmp.unlink(missing_ok=True)
+    if not best_img:
+        return None, secs
+    shot, data = best_img
+    out = outdir / f"slide_{idx:03d}.jpg"
+    out.write_bytes(data)
+    return out, shot
+
+
 def capture_settled(video, times, outdir, settle, total):
     """Ambil frame SETELAH transisi selesai, bukan di tengahnya.
 
@@ -74,10 +130,105 @@ def capture_settled(video, times, outdir, settle, total):
         nxt = times[i + 1] if i + 1 < len(times) else total
         # jangan melewati slide berikutnya; sisakan sedikit jarak aman
         wait = min(settle, max(0.0, (nxt - t) / 2))
-        img = grab_at(video, t + wait, outdir, len(slides))
+        target = t + wait
+
+        # Titik ini bisa jatuh persis saat transisi (whip pan / flip) sedang
+        # berlangsung -> gambar kabur. Coba beberapa kandidat berdekatan dan
+        # ambil yang paling tajam, selama tidak menabrak slide berikutnya.
+        room = max(0.0, nxt - target)
+        img, shot = grab_sharpest(video, target, outdir, len(slides),
+                                  min(0.5, room / 3) if room else 0.0, total)
         if img:
-            slides.append((t, img))
+            # simpan detik GAMBAR DIAMBIL, bukan detik deteksi — transcript
+            # harus cocok dengan yang tampil di layar, bukan dengan momen
+            # transisi beberapa detik sebelumnya.
+            slides.append((shot, img))
     return slides
+
+
+def detect_transitions(video, outdir, min_score=0.25):
+    """Momen transisi + tebakan jenisnya -> [(detik, skor, jenis)].
+
+    Transisi memicu lonjakan scene_score jauh di atas gerakan biasa dalam satu
+    adegan (~0.02). Jenisnya ditebak dari ketajaman frame di detik itu:
+    transisi bergerak (whip pan, flip) meninggalkan frame kabur, sedangkan
+    potongan langsung tetap tajam.
+    """
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", str(video),
+         "-vf", f"select='gt(scene,{min_score})',metadata=print",
+         "-vsync", "vfr", "-f", "null", "-"],
+        capture_output=True, text=True)
+
+    raw = []
+    for blk in re.finditer(r"pts_time:([\d.]+).*?scene_score=([\d.]+)",
+                           proc.stderr, flags=re.S):
+        raw.append((float(blk.group(1)), float(blk.group(2))))
+    if not raw:
+        return []
+
+    # Satu transisi memicu beberapa lonjakan berturut-turut (awal, tengah,
+    # akhir gerakan). Gabungkan yang berdekatan, ambil skor tertingginya.
+    hits = []
+    for t, score in raw:
+        if hits and t - hits[-1][0] < 1.5:
+            if score > hits[-1][1]:
+                hits[-1] = (hits[-1][0], score)
+        else:
+            hits.append((t, score))
+
+    # Bandingkan ketajaman DI titik transisi vs sesaat sesudahnya. Frame kabur
+    # -> transisi bergerak; sama tajam -> potongan langsung.
+    tmp_a, tmp_b = outdir / "_tr_a.jpg", outdir / "_tr_b.jpg"
+    out = []
+    for t, score in hits:
+        for path, at in ((tmp_a, t), (tmp_b, t + 0.6)):
+            subprocess.run(
+                ["ffmpeg", "-hide_banner", "-y", "-ss", f"{at:.2f}",
+                 "-i", str(video), "-vframes", "1", "-q:v", "3", str(path)],
+                capture_output=True, check=False)
+        if not (tmp_a.exists() and tmp_b.exists()):
+            continue
+        during, after = sharpness(tmp_a), sharpness(tmp_b)
+        ratio = during / after if after else 1.0
+        if ratio < 0.55:
+            kind = "gerak (whip pan / flip)"
+        elif ratio < 0.85:
+            kind = "gerak halus (slide / fade)"
+        else:
+            kind = "potongan langsung (cut)"
+        out.append((t, score, kind))
+
+    tmp_a.unlink(missing_ok=True)
+    tmp_b.unlink(missing_ok=True)
+    return out
+
+
+def transition_table(trans, total):
+    """Bagian markdown berisi tabel transisi."""
+    if not trans:
+        return []
+    lines = ["## Transisi terdeteksi", "",
+             f"{len(trans)} transisi. Jenis ditebak dari ketajaman frame saat "
+             "transisi berlangsung — bukan dari membaca gambar.", "",
+             "| # | Waktu | Kekuatan | Jenis |", "|---|---|---|---|"]
+    for i, (t, score, kind) in enumerate(trans, 1):
+        lines.append(f"| {i} | {int(t // 60)}:{int(t % 60):02d} | "
+                     f"{score:.2f} | {kind} |")
+    gaps = [trans[i + 1][0] - trans[i][0] for i in range(len(trans) - 1)]
+    if gaps:
+        lines += ["", f"Jarak antar transisi: rata-rata {sum(gaps) / len(gaps):.0f} "
+                      f"detik (tersingkat {min(gaps):.0f}s, terpanjang {max(gaps):.0f}s).", ""]
+    return lines + [""]
+
+
+def sample_times(total, every):
+    """Titik waktu tiap N detik — tanpa deteksi, tidak ada yang terlewat."""
+    out, t = [], 0.0
+    while t < total:
+        out.append(t)
+        t += every
+    return out
 
 
 def merge_times(times, min_gap):
@@ -103,12 +254,35 @@ def parse_transcript(path, video_title=None):
     text = Path(path).read_text(encoding="utf-8")
 
     if video_title:
-        # File gabungan: potong bagian video yang cocok judulnya
+        # File gabungan: potong bagian milik video ini. Nama file sering berupa
+        # slug ("real-estate-vs-stocks-...") sedangkan judul di transcript
+        # memakai spasi dan tanda baca, jadi keduanya disederhanakan dulu
+        # menjadi deretan kata agar bisa dibandingkan.
+        def words(x):
+            return re.sub(r"[^a-z0-9]+", " ", x.lower()).split()
+
+        want = words(video_title)
+        # buang penanda resolusi/codec yang bukan bagian judul
+        drop = {"720p", "1080p", "480p", "360p", "h264", "h265", "mp4", "webm"}
+        want = [w for w in want if w not in drop]
+
         blocks = re.split(r"^-{20,}$", text, flags=re.M)
+        best, best_hit = None, 0
         for i, b in enumerate(blocks):
-            if video_title.lower()[:30] in b.lower():
-                text = "\n".join(blocks[i:i + 3])
-                break
+            have = set(words(b[:300]))
+            hit = sum(1 for w in want if w in have)
+            if hit > best_hit:
+                best, best_hit = i, hit
+
+        # perlu kecocokan meyakinkan; kalau tidak, lebih baik menolak daripada
+        # diam-diam memakai transcript video lain
+        if best is not None and best_hit >= max(3, len(want) * 0.5):
+            text = "\n".join(blocks[best:best + 3])
+        else:
+            raise ValueError(
+                f"transcript untuk '{video_title}' tidak ketemu di file itu "
+                f"(cocok {best_hit}/{len(want)} kata). Pakai file transcript "
+                f"video ini, atau ambil dulu dengan yt-script.")
 
     out = []
     for m in re.finditer(r"^\[(\d+):(\d+)(?::(\d+))?\]\s*(.+?)(?=^\[|\Z)",
@@ -150,12 +324,34 @@ def text_between(cues, start, end):
     return " ".join(words[a:b]).strip() or para.strip()
 
 
-def build_report(video, slides, cues, outdir, total):
+def build_report(video, slides, cues, outdir, total, trans=None):
     lines = [f"# Slide: {video.stem}", "",
              f"Durasi {int(total // 60)}:{int(total % 60):02d} | "
-             f"{len(slides)} slide terdeteksi", ""]
-    if not cues:
+             f"{len(slides)} slide", ""]
+    if cues:
+        lines += [
+            "> **Catatan untuk pembaca (termasuk AI):** teks di bawah tiap",
+            "> gambar adalah PERKIRAAN, bukan hasil membaca gambar.",
+            ">",
+            "> Cara kerjanya: gambar diambil pada detik tertentu, lalu diambil",
+            "> potongan transcript yang jatuh di rentang waktu itu. Transcript",
+            "> YouTube dikelompokkan per ~30 detik, sedangkan gambar diambil",
+            "> lebih rapat, jadi potongan teks dibagi secara proporsional",
+            "> menurut posisi waktu — bukan menurut isi.",
+            ">",
+            "> Akibatnya teks bisa bergeser 5-15 detik dari gambarnya: sebuah",
+            "> kalimat mungkin merujuk gambar sebelum atau sesudahnya. Anggap",
+            "> teks sebagai KONTEKS SEKITAR, bukan keterangan gambar.",
+            ">",
+            "> Isi gambar sendiri TIDAK pernah dianalisa — tak ada OCR maupun",
+            "> pengenalan gambar. Untuk tahu isi sebuah slide, gambarnya harus",
+            "> benar-benar dilihat.",
+            "",
+        ]
+    else:
         lines += ["> Transcript tidak tersedia — hanya daftar gambar.", ""]
+
+    lines += transition_table(trans, total)
 
     for i, (secs, img) in enumerate(slides):
         nxt = slides[i + 1][0] if i + 1 < len(slides) else total
@@ -213,7 +409,13 @@ def main():
     ap.add_argument("--settle", type=float, default=1.5,
                     help="tunggu N detik setelah pergantian sebelum ambil gambar "
                          "(default 1.5; melewati frame transisi yang buram)")
+    ap.add_argument("--every", type=float, metavar="DETIK",
+                    help="ambil frame tiap N detik, abaikan deteksi. Tidak ada "
+                         "adegan terlewat, tapi ada duplikat saat adegan lama "
+                         "bertahan (mis. --every 10)")
     ap.add_argument("-o", "--out", help="folder hasil (default: di sebelah video)")
+    ap.add_argument("--transitions", action="store_true",
+                    help="tambahkan tabel transisi (kapan + jenisnya)")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
 
@@ -231,19 +433,24 @@ def main():
     total = duration(video)
     print(f"{video.name} — {int(total // 60)}:{int(total % 60):02d}", file=sys.stderr)
 
-    print(f"Deteksi pergantian slide (threshold {args.threshold})...", file=sys.stderr)
-    times = detect_times(video, args.threshold)
-    raw = len(times)
-    times = [0.0] + [t for t in times if t > args.min_gap]
-    times = merge_times(times, args.min_gap)
-    if not times:
-        sys.exit("Tidak ada pergantian terdeteksi. Coba --threshold lebih kecil.")
+    if args.every:
+        print(f"Sampling tiap {args.every:g} detik...", file=sys.stderr)
+    else:
+        print(f"Deteksi pergantian slide (threshold {args.threshold})...",
+              file=sys.stderr)
+    if args.every:
+        times = sample_times(total, args.every)
+        settle = 0.0        # tidak ada transisi yang perlu ditunggu
+    else:
+        raw = detect_times(video, args.threshold)
+        times = merge_times([0.0] + [t for t in raw if t > args.min_gap],
+                            args.min_gap)
+        settle = args.settle
+        if not times:
+            sys.exit("Tidak ada pergantian terdeteksi. Coba --threshold lebih kecil.")
 
-    slides = capture_settled(video, times, outdir, args.settle, total)
-    dropped = raw + 1 - len(slides)
-    print(f"    {len(slides)} slide" +
-          (f" ({dropped} frame transisi/duplikat dibuang)" if dropped > 0 else ""),
-          file=sys.stderr)
+    slides = capture_settled(video, times, outdir, settle, total)
+    print(f"    {len(slides)} slide", file=sys.stderr)
 
     cues = []
     if args.transcript:
@@ -252,7 +459,13 @@ def main():
     else:
         print("    tanpa transcript (pakai -t file.txt)", file=sys.stderr)
 
-    out = build_report(video, slides, cues, outdir, total)
+    trans = None
+    if args.transitions:
+        print("Deteksi transisi...", file=sys.stderr)
+        trans = detect_transitions(video, outdir)
+        print(f"    {len(trans)} transisi", file=sys.stderr)
+
+    out = build_report(video, slides, cues, outdir, total, trans)
     size = sum(f.stat().st_size for f in outdir.glob("*.jpg")) / 1048576
     print(f"\n{len(slides)} slide -> {outdir} (~{size:.0f} MB)", file=sys.stderr)
     print(f"laporan -> {out}", file=sys.stderr)
