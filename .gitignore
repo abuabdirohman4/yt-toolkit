@@ -1,2 +1,13 @@
-.venv
-__pycache__
+# Python env — dibuat ulang dengan: uv venv && uv pip install yt-dlp
+.venv/
+__pycache__/
+*.pyc
+
+# Hasil keluaran tool (transcript, CSV, gambar slide)
+*.txt
+*.csv
+*_slides/
+slide_*.jpg
+
+# macOS
+.DS_Store

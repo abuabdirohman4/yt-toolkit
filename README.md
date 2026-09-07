@@ -1,4 +1,4 @@
-# yt-transcript
+# yt-toolkit
 
 Kumpulan tool untuk mengambil data YouTube: transcript, data channel, dan slide dari file video.
 
@@ -11,7 +11,7 @@ Dipakai sendiri lewat terminal — bukan web app, tidak perlu API key, tidak per
 Sudah terpasang. Kalau pindah mesin atau venv-nya hilang:
 
 ```bash
-cd ~/Documents/applications/3_resources/yt-transcript
+cd ~/Documents/applications/3_resources/yt-toolkit
 uv venv
 uv pip install yt-dlp
 ```
@@ -174,7 +174,7 @@ Untuk scraping banyak video, biarkan `--delay` di 4 detik atau lebih.
 ## Struktur file
 
 ```
-yt-transcript/
+yt-toolkit/
 ├── yt_transcript.py    # transcript playlist/video      -> yt-transcript
 ├── yt_channel.py       # data channel ke CSV            -> yt-channel
 ├── yt_slides.py        # slide dari file video          -> yt-slides
@@ -193,3 +193,15 @@ yt-slides --selftest       # cek pencocokan transcript dengan slide
 ```
 
 Dua-duanya jalan tanpa jaringan.
+
+---
+
+## Tool YouTube lain
+
+Repo terpisah, tidak saling bergantung — tiap tool berdiri sendiri:
+
+- **[yt-toolkit](https://github.com/abuabdirohman4/yt-toolkit)** (repo ini) — transcript, data channel, ekstraksi slide. Python CLI.
+- **[yt-research](https://github.com/abuabdirohman4/yt-research)** — riset channel kompetitor: cari channel dari niche, bedah channel orang lain. Chrome extension.
+- **[yt-studio-scrape](https://github.com/abuabdirohman4/yt-studio-scrape)** — ambil data analytics dari YouTube Studio channel sendiri. Chrome extension.
+
+Pembagiannya: `yt-research` untuk channel **orang lain**, `yt-studio-scrape` untuk channel **sendiri**, `yt-toolkit` untuk isi video (transcript, slide) dan data publik channel mana pun.
