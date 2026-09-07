@@ -17,7 +17,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from yt_bulk import (BROWSERS, OUT_DIR, PLAYER_CLIENT, detect_cookie_browser,
+from yt_transcript import (BROWSERS, OUT_DIR, PLAYER_CLIENT, detect_cookie_browser,
                      extract_video, fetch_transcript, ts)
 
 COLUMNS = [
@@ -58,7 +58,7 @@ def list_channel(url, limit=None):
     opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
     if limit:
         opts["playlistend"] = limit
-    from yt_bulk import _COOKIE_BROWSER
+    from yt_transcript import _COOKIE_BROWSER
     if _COOKIE_BROWSER:
         opts["cookiesfrombrowser"] = (_COOKIE_BROWSER,)
 
@@ -185,7 +185,7 @@ def main():
 
     print(f"{len(urls)} channel | mode: {'deep' if args.deep else 'cepat'}", file=sys.stderr)
     detect_cookie_browser("https://youtube.com/watch?v=e82mT1UnZTw")
-    from yt_bulk import _COOKIE_BROWSER
+    from yt_transcript import _COOKIE_BROWSER
     print(f"cookie: {_COOKIE_BROWSER or 'tidak ada'}", file=sys.stderr)
 
     all_rows, transcripts = [], {}

@@ -15,7 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from yt_bulk import detect_cookie_browser
+from yt_transcript import detect_cookie_browser
 
 DEFAULT_DIR = Path.home() / "Downloads/yt"
 WARN_COUNT = 10          # di atas ini, minta konfirmasi dulu

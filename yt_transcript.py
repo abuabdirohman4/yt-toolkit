@@ -2,9 +2,9 @@
 """Ambil transcript semua video dalam playlist YouTube jadi satu file .txt.
 
 Usage:
-    python3 yt_bulk.py "https://youtube.com/playlist?list=XXXX"
-    python3 yt_bulk.py "https://youtube.com/watch?v=XXXX" -o ~/lain.txt
-    python3 yt_bulk.py --selftest
+    python3 yt_transcript.py "https://youtube.com/playlist?list=XXXX"
+    python3 yt_transcript.py "https://youtube.com/watch?v=XXXX" -o ~/lain.txt
+    python3 yt_transcript.py --selftest
 """
 
 import argparse
