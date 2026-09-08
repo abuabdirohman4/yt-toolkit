@@ -170,16 +170,38 @@ def detect_cookie_browser(probe_url):
     return None
 
 
-def list_videos(url):
-    """(judul_playlist, [(id, judul)])."""
+def is_multi(url):
+    """URL ini berisi banyak video? (playlist atau channel)
+
+    Channel bisa ditulis bermacam bentuk: /@handle, /channel/UC..., /c/nama,
+    /user/nama — dengan atau tanpa akhiran /videos, /streams, /shorts.
+    """
+    return bool(re.search(
+        r"list=|/@[^/]+|/channel/|/c/|/user/|/(videos|streams|shorts|playlists)/?$",
+        url))
+
+
+def list_videos(url, popular=None, limit=None):
+    """(judul, [(id, judul)]) dari playlist, channel, atau satu video.
+
+    popular=N -> ambil N video dengan views terbanyak. Diurutkan di sini,
+    bukan lewat parameter sort YouTube: `?sort=p` diabaikan yt-dlp (terbukti
+    mengembalikan urutan yang sama persis dengan tab biasa).
+    """
     from yt_dlp import YoutubeDL
 
     # Video tunggal: jalur playlist kena gerbang bot, jadi pakai extractor
     # langsung seperti saat ambil caption.
-    if "list=" not in url:
+    if not is_multi(url):
         info = extract_video(url)
         vid = info.get("id") or url.rsplit("v=", 1)[-1][:11]
         return info.get("title") or vid, [(vid, info.get("title") or vid)]
+
+    # Channel tanpa akhiran -> arahkan ke tab video, kalau tidak yt-dlp
+    # mengembalikan halaman depan (campur playlist dan konten lain).
+    if "list=" not in url and not re.search(
+            r"/(videos|streams|shorts|playlists)/?$", url):
+        url = url.rstrip("/") + "/videos"
 
     with YoutubeDL(_opts(extract_flat=True)) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -187,7 +209,14 @@ def list_videos(url):
     if info.get("_type") != "playlist":
         return info.get("title", "video"), [(info["id"], info.get("title", info["id"]))]
 
-    vids = [(e["id"], e.get("title") or e["id"]) for e in info.get("entries", []) if e]
+    entries = [e for e in info.get("entries", []) if e]
+    if popular:
+        entries.sort(key=lambda e: e.get("view_count") or 0, reverse=True)
+        entries = entries[:popular]
+    elif limit:
+        entries = entries[:limit]
+
+    vids = [(e["id"], e.get("title") or e["id"]) for e in entries]
     return info.get("title", "playlist"), vids
 
 
@@ -195,6 +224,10 @@ def main():
     ap = argparse.ArgumentParser(description="Bulk YouTube transcript -> satu .txt")
     ap.add_argument("url", nargs="?", help="URL playlist atau video")
     ap.add_argument("-o", "--out", help="path file output")
+    ap.add_argument("--popular", type=int, metavar="N",
+                    help="ambil N video paling banyak ditonton (bukan terbaru)")
+    ap.add_argument("--limit", type=int, metavar="N",
+                    help="ambil N video pertama sesuai urutan aslinya")
     ap.add_argument("--selftest", action="store_true", help="cek logika paragraf, tanpa jaringan")
     args = ap.parse_args()
 
@@ -203,17 +236,18 @@ def main():
     if not args.url:
         ap.error("butuh URL (atau --selftest)")
 
-    # Playlist bisa dibaca tanpa cookie; video individual butuh cookie. Urutan
-    # ini penting: daftar dulu, baru probe cookie pakai video pertama.
+    # Daftar playlist/channel bisa dibaca tanpa cookie; video individual butuh
+    # cookie. Urutan ini penting: daftar dulu, baru probe cookie pakai video
+    # pertama — probe butuh URL video, bukan URL channel.
     print("Ambil daftar video...", file=sys.stderr)
-    if "list=" in args.url:
-        playlist, videos = list_videos(args.url)
+    if is_multi(args.url):
+        playlist, videos = list_videos(args.url, args.popular, args.limit)
         if not videos:
             sys.exit("Tidak ada video ditemukan.")
         detect_cookie_browser(f"https://youtube.com/watch?v={videos[0][0]}")
     else:
         detect_cookie_browser(args.url)
-        playlist, videos = list_videos(args.url)
+        playlist, videos = list_videos(args.url, args.popular, args.limit)
         if not videos:
             sys.exit("Tidak ada video ditemukan.")
 

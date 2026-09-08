@@ -43,11 +43,14 @@ def fmt_date(upload_date):
     return f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:]}"
 
 
-def list_channel(url, limit=None):
+def list_channel(url, limit=None, popular=None):
     """(info_channel, [entry]) — cepat, satu request, tanpa buka tiap video.
 
     view_count di sini angka BULAT hasil pembulatan YouTube (1.9K -> 1900),
     sama seperti yang terbaca di layar. Angka persis butuh --deep.
+
+    popular=N -> N video dengan views terbanyak. Diurutkan di sini karena
+    parameter sort YouTube (?sort=p) diabaikan yt-dlp.
     """
     from yt_dlp import YoutubeDL
 
@@ -56,7 +59,9 @@ def list_channel(url, limit=None):
         url += "/videos"
 
     opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
-    if limit:
+    if limit and not popular:
+        # Saat mode populer, JANGAN potong di server: harus ambil semua dulu
+        # baru diurutkan, kalau tidak yang tersisa cuma N video terbaru.
         opts["playlistend"] = limit
     from yt_transcript import _COOKIE_BROWSER
     if _COOKIE_BROWSER:
@@ -64,7 +69,12 @@ def list_channel(url, limit=None):
 
     with YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
-    return info, [e for e in (info.get("entries") or []) if e]
+
+    entries = [e for e in (info.get("entries") or []) if e]
+    if popular:
+        entries.sort(key=lambda e: e.get("view_count") or 0, reverse=True)
+        entries = entries[:popular]
+    return info, entries
 
 
 def row_from_flat(info, entry, n):
@@ -102,11 +112,107 @@ def row_from_deep(info, n):
     }
 
 
-def scrape_channel(url, args, transcripts):
+def download(url, dest):
+    """Unduh satu file. True kalau berhasil."""
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            dest.write_bytes(r.read())
+        return True
+    except Exception:
+        return False
+
+
+def pick_thumb(thumbs, square):
+    """Thumbnail terbesar. square=True -> avatar (rasio 1:1), else banner."""
+    best, best_px = None, -1
+    for t in thumbs or []:
+        w, h = t.get("width"), t.get("height")
+        if not (w and h):
+            continue
+        is_sq = w == h
+        if is_sq != square:
+            continue
+        if w * h > best_px:
+            best, best_px = t.get("url"), w * h
+    return best
+
+
+def write_channel_info(info, outdir, name, entries=None, partial=False):
+    """CSV berisi satu baris: profil channel.
+
+    Total Views dijumlahkan dari daftar video — yt-dlp tidak menyediakan angka
+    itu di level channel. Kalau daftarnya dipotong (--limit / --popular),
+    hasilnya hanya sebagian, jadi ditandai supaya tidak disangka total penuh.
+    """
+    desc = (info.get("description") or "").replace("\n", " | ").strip()
+
+    views = sum(e.get("view_count") or 0 for e in (entries or []))
+    views_txt = ""
+    if views:
+        views_txt = f"{views:,}" + (" (sebagian)" if partial else "")
+
+    row = {
+        "Channel Name": info.get("channel") or name,
+        "Subscribers": info.get("channel_follower_count") or "",
+        "Total Videos": info.get("playlist_count") or len(entries or []) or "",
+        "Total Views": views_txt,
+        "Channel URL": info.get("channel_url") or "",
+        "Handle": info.get("uploader_id") or "",
+        "Channel ID": info.get("channel_id") or "",
+        "Tags": ", ".join(info.get("tags") or [])[:300],
+        "Channel Description": desc,
+    }
+    out = outdir / "channel-info.csv"
+    with out.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=list(row))
+        w.writeheader()
+        w.writerow(row)
+    return out
+
+
+def save_channel_images(info, outdir, name):
+    """Avatar + banner channel."""
+    d = outdir / "channel-images"
+    d.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w-]", "_", name)[:40]
+    got = []
+    for kind, square in (("avatar", True), ("banner", False)):
+        u = pick_thumb(info.get("thumbnails"), square)
+        if u and download(u, d / f"{safe}_{kind}.jpg"):
+            got.append(kind)
+    return d, got
+
+
+def save_thumbnails(entries, outdir, name, delay):
+    """Thumbnail tiap video."""
+    d = outdir / "thumbnails"
+    d.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^\w-]", "_", name)[:40]
+    n = 0
+    for i, e in enumerate(entries, 1):
+        vid = e.get("id")
+        if not vid:
+            continue
+        # maxres tidak selalu ada; hq720 hampir selalu tersedia
+        for q in ("maxresdefault", "hq720", "hqdefault"):
+            if download(f"https://i.ytimg.com/vi/{vid}/{q}.jpg",
+                        d / f"{safe}_{i:03d}.jpg"):
+                n += 1
+                break
+        time.sleep(min(delay, 1.0))
+    return d, n
+
+
+def scrape_channel(url, args, transcripts, collect=None):
     """-> list baris CSV untuk satu channel."""
-    info, entries = list_channel(url, args.limit)
+    info, entries = list_channel(url, args.limit, args.popular)
     name = info.get("channel") or info.get("title") or url
     print(f'\n"{name}" — {len(entries)} video', file=sys.stderr)
+    if collect is not None:
+        collect.append((info, entries, name))
 
     if not args.deep:
         return [row_from_flat(info, e, i) for i, e in enumerate(entries, 1)]
@@ -165,6 +271,16 @@ def main():
     ap.add_argument("--transcript", action="store_true",
                     help="ikut ambil transcript (butuh --deep)")
     ap.add_argument("--limit", type=int, help="batasi jumlah video per channel")
+    ap.add_argument("--popular", type=int, metavar="N",
+                    help="ambil N video paling banyak ditonton (bukan terbaru)")
+    ap.add_argument("--info", action="store_true",
+                    help="simpan channel-info.csv (profil channel)")
+    ap.add_argument("--images", action="store_true",
+                    help="unduh avatar + banner channel")
+    ap.add_argument("--thumbnails", action="store_true",
+                    help="unduh thumbnail tiap video")
+    ap.add_argument("--all", action="store_true",
+                    help="sama dengan --info --images --thumbnails")
     ap.add_argument("--delay", type=float, default=4.0,
                     help="jeda detik antar video (default 4; turunkan kalau buru-buru)")
     ap.add_argument("-o", "--out", help="path file CSV")
@@ -188,10 +304,10 @@ def main():
     from yt_transcript import _COOKIE_BROWSER
     print(f"cookie: {_COOKIE_BROWSER or 'tidak ada'}", file=sys.stderr)
 
-    all_rows, transcripts = [], {}
+    all_rows, transcripts, collected = [], {}, []
     for url in urls:
         try:
-            all_rows += scrape_channel(url, args, transcripts)
+            all_rows += scrape_channel(url, args, transcripts, collected)
         except Exception as exc:
             print(f"  channel gagal ({url}): {str(exc)[:70]}", file=sys.stderr)
 
@@ -209,6 +325,25 @@ def main():
     print(f"\n{len(all_rows)} video -> {out}", file=sys.stderr)
     if transcripts:
         write_transcripts(transcripts)
+
+    want_info = args.info or args.all
+    want_img = args.images or args.all
+    want_thumb = args.thumbnails or args.all
+    if want_info or want_img or want_thumb:
+        base = out.parent
+        for info, entries, name in collected:
+            if want_info:
+                partial = bool(args.limit or args.popular)
+                f = write_channel_info(info, base, name, entries, partial)
+                print(f"profil   -> {f}", file=sys.stderr)
+            if want_img:
+                d, got = save_channel_images(info, base, name)
+                print(f"gambar   -> {d} ({', '.join(got) or 'gagal'})",
+                      file=sys.stderr)
+            if want_thumb:
+                print(f"unduh {len(entries)} thumbnail...", file=sys.stderr)
+                d, n = save_thumbnails(entries, base, name, args.delay)
+                print(f"thumbnail-> {d} ({n}/{len(entries)})", file=sys.stderr)
 
 
 if __name__ == "__main__":

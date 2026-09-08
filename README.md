@@ -41,8 +41,17 @@ Alias sudah ada di `~/.zshrc`. Terminal baru langsung bisa; terminal yang sedang
 ```bash
 yt-transcript "https://youtube.com/playlist?list=XXXX"   # seluruh playlist
 yt-transcript "https://youtube.com/watch?v=XXXX"         # satu video
+yt-transcript "https://youtube.com/@NamaChannel"          # SEMUA video channel
+yt-transcript "URL" --popular 10                         # 10 paling banyak ditonton
+yt-transcript "URL" --limit 10                           # 10 pertama (urutan asli)
 yt-transcript "URL" -o ~/lain.txt                        # tujuan lain
 ```
+
+Menerima URL **playlist, channel, atau video tunggal**. Bentuk channel apa pun: `/@handle`, `/channel/UC...`, `/c/nama`, dengan atau tanpa `/videos`.
+
+**`--popular N` vs `--limit N`.** `--popular` mengurutkan seluruh video channel berdasarkan jumlah tontonan lalu ambil N teratas — berguna untuk mempelajari konten yang paling berhasil. `--limit` hanya memotong N pertama sesuai urutan asli (terbaru dulu).
+
+Channel besar butuh waktu: 148 video ≈ 15–25 menit, dan berisiko kena rate limit di tengah jalan. Mulai dengan `--popular 10` dulu.
 
 Default keluaran: `second-brain/0.Inbox/{NamaPlaylist}_all_transcripts.txt`
 
@@ -64,7 +73,24 @@ yt-channel "URL" --deep                                        # angka persis
 yt-channel "URL" --deep --transcript                           # + transcript
 yt-channel urls.txt                                            # banyak channel
 yt-channel "URL" --limit 20                                    # batasi video
+yt-channel "URL" --popular 10                                  # 10 terpopuler
+yt-channel "URL" --all                                         # + profil, gambar, thumbnail
 ```
+
+### Keluaran tambahan
+
+Selain CSV data video, tiga keluaran opsional (setara mode Deep Dive di extension `yt-research`):
+
+| Flag | Hasil |
+|---|---|
+| `--info` | `channel-info.csv` — nama, subscriber, jumlah video, total views, handle, tag, deskripsi |
+| `--images` | `channel-images/` — avatar + banner channel |
+| `--thumbnails` | `thumbnails/` — thumbnail tiap video (maxres, jatuh ke hq720 kalau tidak ada) |
+| `--all` | ketiganya sekaligus |
+
+Semua ditaruh di folder yang sama dengan CSV video.
+
+**Catatan Total Views:** yt-dlp tidak menyediakan angka ini di level channel, jadi dijumlahkan dari daftar video. Kalau dipakai bersama `--limit` atau `--popular`, angkanya hanya sebagian dan ditandai `(sebagian)` supaya tidak disangka total penuh.
 
 Default keluaran: `second-brain/0.Inbox/yt_channels_{tanggal}.csv`
 
@@ -81,7 +107,8 @@ Mode cepat memakai angka bulat yang sama seperti yang terbaca di layar YouTube. 
 
 ### Flag
 
-- `--limit N` — batasi jumlah video per channel
+- `--limit N` — batasi jumlah video per channel (urutan asli, terbaru dulu)
+- `--popular N` — ambil N video paling banyak ditonton dari seluruh channel
 - `--delay N` — jeda antar video, default 4 detik. Jangan diturunkan untuk channel besar (kena rate-limit)
 - `--transcript` — ikut ambil transcript, butuh `--deep`
 - `-o file.csv` — tujuan lain
