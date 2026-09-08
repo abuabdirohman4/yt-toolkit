@@ -16,7 +16,9 @@ uv venv
 uv pip install yt-dlp
 ```
 
-`yt-slides` butuh ffmpeg: `brew install ffmpeg`
+`yt-slides` dan `yt-audio` butuh ffmpeg: `brew install ffmpeg`
+
+Opsional, hanya untuk analisa nada di `yt-audio`: `uv pip install librosa`
 
 Alias sudah ada di `~/.zshrc`. Terminal baru langsung bisa; terminal yang sedang terbuka perlu `source ~/.zshrc`.
 
@@ -29,6 +31,7 @@ Alias sudah ada di `~/.zshrc`. Terminal baru langsung bisa; terminal yang sedang
 | `yt-transcript` | URL playlist / video | `.txt` transcript per paragraf |
 | `yt-channel` | URL channel | `.csv` data video (views, likes, dll) |
 | `yt-slides` | file video `.mp4` | folder gambar slide + `slides.md` |
+| `yt-audio` | file video / audio | `audio.md` — kualitas audio + gaya narasi |
 | `yt_download.py` | URL | file video (**belum terbukti jalan**) |
 
 ---
@@ -143,6 +146,57 @@ Jenis transisi ditebak dari ketajaman frame saat transisi berlangsung — transi
 
 ---
 
+## 4. `yt-audio` — kualitas audio & gaya narasi
+
+Ukur karakter audio sebuah video: seberapa keras, seberapa dikompresi, serapat apa jedanya, setinggi apa nadanya. Berguna untuk mempelajari dan meniru gaya narasi sebuah channel.
+
+**Butuh file video di disk.**
+
+```bash
+yt-audio "video.mp4"              # lengkap, ~45 detik untuk video 17 menit
+yt-audio "video.mp4" --no-pitch   # tanpa analisa nada, ~10 detik
+yt-audio "video.mp4" -o folder/   # tujuan lain
+```
+
+Keluaran: `audio.md` di folder yang sama dengan videonya.
+
+### Isi laporan
+
+1. **Ringkasan** — tiap metrik disertai kolom "Artinya" yang menerjemahkan angkanya. Ini yang bikin laporan bisa dipelajari, bukan sekadar deretan angka.
+2. **Angka mentah** — 12 metrik untuk membandingkan antar video
+3. **Jeda panjang (≥1 detik)** — sering menandai pergantian babak, jadi bisa dipakai melihat struktur video tanpa menontonnya
+4. **Cara meniru** — panduan konkret yang dihitung dari angka video itu sendiri
+
+### Yang diukur
+
+| Metrik | Arti |
+|---|---|
+| Loudness (LUFS) | Seberapa keras menurut standar siaran. Target YouTube −14 |
+| Jangkauan dinamis (LRA) | Selisih bagian keras dan pelan. Rendah = dikompresi berat |
+| True peak | Puncak tertinggi. Mepet 0 = sudah di-limit habis |
+| Jeda per menit | Kerapatan potongan — proksi tempo bicara |
+| Porsi bicara | Persen waktu yang terisi suara |
+| Nada dasar (Hz) | Tinggi rendah suara narator |
+| Variasi nada | Seberapa ekspresif, dihitung relatif terhadap nada dasar |
+
+### Analisa nada bersifat opsional
+
+Dua metrik terakhir butuh `librosa`:
+
+```bash
+uv pip install librosa      # ~275 MB (numpy, scipy, numba)
+```
+
+Tanpa librosa, bagian nada dilewati otomatis dan laporan tetap terbentuk.
+
+Untuk video panjang, nada diukur dari tiga potongan 60 detik yang tersebar (awal, tengah, akhir) — bukan satu blok di awal, supaya mewakili keseluruhan video.
+
+### Catatan kalibrasi
+
+Penilaian "variasi nada" dikalibrasi dari narasi penjelas profesional yang terukur di kisaran 35%. Angka itu **wajar**, bukan berlebihan — ambang naif akan salah melabeli narasi normal sebagai "terlalu ekspresif", terutama pada suara rendah di mana simpangan yang sama menghasilkan persentase lebih besar.
+
+---
+
 ## Catatan penting
 
 ### Cookie browser
@@ -178,6 +232,7 @@ yt-toolkit/
 ├── yt_transcript.py    # transcript playlist/video      -> yt-transcript
 ├── yt_channel.py       # data channel ke CSV            -> yt-channel
 ├── yt_slides.py        # slide dari file video          -> yt-slides
+├── yt_audio.py         # analisa audio + narasi         -> yt-audio
 ├── yt_download.py      # unduh video (belum terbukti)
 ├── .venv/              # Python + yt-dlp
 └── README.md
@@ -190,6 +245,7 @@ yt-toolkit/
 ```bash
 yt-transcript --selftest   # cek logika penyusunan paragraf
 yt-slides --selftest       # cek pencocokan transcript dengan slide
+yt-audio --selftest        # cek hitungan jeda + penilaian nada
 ```
 
 Dua-duanya jalan tanpa jaringan.
