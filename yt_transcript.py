@@ -27,6 +27,27 @@ PLAYER_CLIENT = "web_embedded"
 BROWSERS = ("brave", "chrome", "safari")   # sumber cookie, dicoba berurutan
 
 
+class QuotaExhausted(Exception):
+    """Jatah caption per-IP habis — bukan error sesaat, mengulang percuma."""
+
+
+def slug(name, fallback="channel", limit=None):
+    """Nama file: lowercase snake_case. Dipakai bersama oleh semua tool di sini
+    supaya hasil yt-transcript, yt-channel, dan extension bernama seragam."""
+    s = re.sub(r"[^\w\s-]", "", (name or "").lower())
+    s = re.sub(r"[\s-]+", "_", s.strip())
+    s = re.sub(r"_+", "_", s).strip("_")
+    if limit:
+        s = s[:limit].strip("_")
+    return s or fallback
+
+
+def hms(seconds):
+    """Detik -> '2m 05s' / '45s', untuk tampilan progres."""
+    s = int(seconds)
+    return f"{s // 60}m {s % 60:02d}s" if s >= 60 else f"{s}s"
+
+
 def ts(seconds):
     """Detik -> [M:SS] atau [H:MM:SS]."""
     s = int(seconds)
@@ -122,23 +143,32 @@ def extract_video(url):
         return ie.extract(url)
 
 
-def fetch_transcript(url):
+def fetch_transcript(url, on_wait=None):
     """(teks_paragraf, lang) atau (None, None) kalau tak ada caption."""
     lang, cap_url = pick_track(extract_video(url))
     if not cap_url:
         return None, None
 
-    # Server caption punya jatah sendiri, lebih ketat dari API metadata, dan
-    # membalas 429 kalau terlalu sering. Tunggu makin lama tiap gagal.
-    for attempt in range(4):
+    # Server caption punya jatah sendiri, jauh lebih ketat dari API metadata.
+    # 429 yang datang SEKETIKA (<2 detik) = jatah IP habis: mengulang tidak
+    # menolong dan justru menambah beban ke endpoint yang sedang menolak, yang
+    # pada sebagian sistem memperpanjang masa blokir. Yang layak diulang hanya
+    # 429 yang datang setelah jeda — itu tanda server sedang sibuk sesaat.
+    for attempt in range(2):
+        t0 = time.time()
         try:
             with urllib.request.urlopen(cap_url, timeout=30) as r:
                 raw = r.read().decode("utf-8")
             return to_paragraphs(parse_json3(raw)), lang
         except urllib.error.HTTPError as e:
-            if e.code != 429 or attempt == 3:
+            if e.code != 429 or attempt == 1:
                 raise
-            time.sleep(20 * (attempt + 1))  # 20s, 40s, 60s
+            if time.time() - t0 < 2:
+                raise QuotaExhausted(
+                    "jatah caption YouTube habis (429 seketika)")
+            if on_wait:
+                on_wait(20, 1)
+            time.sleep(20)
     return None, None
 
 
@@ -260,8 +290,7 @@ def main():
     if args.out:
         out = Path(args.out).expanduser()
     else:
-        safe = re.sub(r"[^\w\s-]", "", playlist).strip().replace(" ", "_")
-        out = OUT_DIR / f"{safe or 'playlist'}_all_transcripts.txt"
+        out = OUT_DIR / f"{slug(playlist, 'playlist')}_all_transcripts.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
 
     bar = "=" * 52
@@ -273,24 +302,68 @@ def main():
     ]
 
     ok = failed = 0
+    total = len(videos)
+    started = time.time()
+    quota_done = False
     for i, (vid, title) in enumerate(videos, 1):
-        print(f"[{i}/{len(videos)}] {title[:60]}", file=sys.stderr)
+        pct = i / total * 100
+        elapsed = time.time() - started
+        # perkiraan sisa dari kecepatan rata-rata sejauh ini
+        eta = ""
+        if i > 1:
+            per = elapsed / (i - 1)
+            eta = f" | sisa ~{hms(per * (total - i + 1))}"
+        print(f"[{i}/{total}] {pct:.0f}%{eta}  {title[:52]}", file=sys.stderr)
+
         url = f"https://youtube.com/watch?v={vid}"
+        t0 = time.time()
+
+        def waiting(sec, n):
+            # Tanpa ini prosesnya diam sampai 2 menit dan terlihat seperti hang.
+            print(f"    kena batas YouTube, tunggu {sec}s "
+                  f"(percobaan {n}/3)...", file=sys.stderr, flush=True)
+
         try:
-            body, lang = fetch_transcript(url)
+            body, lang = fetch_transcript(url, on_wait=waiting)
             if body:
                 ok += 1
-                print(f"    ok ({lang})", file=sys.stderr)
+                print(f"    ok ({lang}) {hms(time.time() - t0)}", file=sys.stderr)
             else:
                 body, failed = "[NO TRANSCRIPT AVAILABLE]", failed + 1
                 print("    tidak ada caption", file=sys.stderr)
+        except QuotaExhausted as e:
+            body, failed = "[DILEWATI: jatah YouTube habis]", failed + 1
+            print(f"    {e}", file=sys.stderr)
+            quota_done = True
         except Exception as e:
             body, failed = f"[ERROR: {e}]", failed + 1
-            print(f"    gagal: {str(e)[:70]}", file=sys.stderr)
+            print(f"    gagal: {str(e)[:64]}", file=sys.stderr)
 
         chunks.append(f"\n{dash}\nVIDEO {i}: {title}\nURL: {url}\n{dash}\n\n{body}\n")
-        if i < len(videos):
+
+        # Jatah habis -> berhenti seketika. Melanjutkan hanya menambah
+        # permintaan ke endpoint yang sedang menolak.
+        if quota_done or (failed == i and i >= 3 and ok == 0):
+            print(f"\nJatah caption YouTube habis (berhenti di video {i}). "
+                  f"Coba lagi beberapa jam lagi, atau ganti jaringan.",
+                  file=sys.stderr)
+            for j in range(i + 1, total + 1):
+                v2, t2 = videos[j - 1]
+                chunks.append(f"\n{dash}\nVIDEO {j}: {t2}\n"
+                              f"URL: https://youtube.com/watch?v={v2}\n{dash}\n\n"
+                              f"[DILEWATI: jatah YouTube habis]\n")
+            failed = total
+            break
+
+        if i < total:
             time.sleep(1)  # jeda sopan, hindari rate-limit
+
+    if not ok:
+        # Nol transcript: file cuma berisi header + penanda dilewati. Menulisnya
+        # hanya mengotori folder dan mudah disangka hasil yang berhasil.
+        print(f"\n{failed} gagal, tidak ada transcript — file tidak ditulis.",
+              file=sys.stderr)
+        return
 
     out.write_text("\n".join(chunks), encoding="utf-8")
     size = out.stat().st_size / 1024

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from yt_transcript import (BROWSERS, OUT_DIR, PLAYER_CLIENT, detect_cookie_browser,
-                     extract_video, fetch_transcript, ts)
+                     extract_video, fetch_transcript, slug, ts)
 
 COLUMNS = [
     "No.", "Channel", "Subscribers", "Video Title", "Video URL", "Views",
@@ -177,7 +177,7 @@ def save_channel_images(info, outdir, name):
     """Avatar + banner channel."""
     d = outdir / "channel-images"
     d.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w-]", "_", name)[:40]
+    safe = slug(name, "channel", limit=40)
     got = []
     for kind, square in (("avatar", True), ("banner", False)):
         u = pick_thumb(info.get("thumbnails"), square)
@@ -190,7 +190,7 @@ def save_thumbnails(entries, outdir, name, delay):
     """Thumbnail tiap video."""
     d = outdir / "thumbnails"
     d.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r"[^\w-]", "_", name)[:40]
+    safe = slug(name, "channel", limit=40)
     n = 0
     for i, e in enumerate(entries, 1):
         vid = e.get("id")
@@ -206,7 +206,7 @@ def save_thumbnails(entries, outdir, name, delay):
     return d, n
 
 
-def scrape_channel(url, args, transcripts, collect=None):
+def scrape_channel(url, args, transcripts, collect=None, sink=None):
     """-> list baris CSV untuk satu channel."""
     info, entries = list_channel(url, args.limit, args.popular)
     name = info.get("channel") or info.get("title") or url
@@ -215,7 +215,11 @@ def scrape_channel(url, args, transcripts, collect=None):
         collect.append((info, entries, name))
 
     if not args.deep:
-        return [row_from_flat(info, e, i) for i, e in enumerate(entries, 1)]
+        rows = [row_from_flat(info, e, i) for i, e in enumerate(entries, 1)]
+        if sink:
+            for r in rows:
+                sink(r)
+        return rows
 
     rows = []
     for i, e in enumerate(entries, 1):
@@ -228,6 +232,8 @@ def scrape_channel(url, args, transcripts, collect=None):
             row["Channel"] = row["Channel"] or name
             row["Subscribers"] = row["Subscribers"] or (info.get("channel_follower_count") or "")
             rows.append(row)
+            if sink:
+                sink(row)
 
             # Transcript ditangani terpisah: kalau gagal, baris metadata yang
             # sudah berhasil tetap dipakai — jangan bikin baris kedua.
@@ -244,7 +250,10 @@ def scrape_channel(url, args, transcripts, collect=None):
                     print(f"       transcript gagal: {str(exc)[:50]}", file=sys.stderr)
         except Exception as exc:
             print(f"       gagal: {str(exc)[:60]}", file=sys.stderr)
-            rows.append({**row_from_flat(info, e, i), "Description": f"[ERROR: {exc}]"})
+            bad = {**row_from_flat(info, e, i), "Description": f"[ERROR: {exc}]"}
+            rows.append(bad)
+            if sink:
+                sink(bad)
         time.sleep(args.delay)
     return rows
 
@@ -252,8 +261,7 @@ def scrape_channel(url, args, transcripts, collect=None):
 def write_transcripts(transcripts):
     bar, dash = "=" * 52, "-" * 52
     for channel, items in transcripts.items():
-        safe = re.sub(r"[^\w\s-]", "", channel).strip().replace(" ", "_") or "channel"
-        out = OUT_DIR / f"{safe}_transcripts.txt"
+        out = OUT_DIR / f"{slug(channel)}_transcripts.txt"
         chunks = [f"{bar}\n{channel.upper()} - CHANNEL TRANSCRIPTS\n"
                   f"Total Videos: {len(items)} | Export Date: "
                   f"{datetime.now().strftime('%-m/%-d/%Y')}\n{bar}\n"]
@@ -304,23 +312,39 @@ def main():
     from yt_transcript import _COOKIE_BROWSER
     print(f"cookie: {_COOKIE_BROWSER or 'tidak ada'}", file=sys.stderr)
 
-    all_rows, transcripts, collected = [], {}, []
-    for url in urls:
-        try:
-            all_rows += scrape_channel(url, args, transcripts, collected)
-        except Exception as exc:
-            print(f"  channel gagal ({url}): {str(exc)[:70]}", file=sys.stderr)
-
-    if not all_rows:
-        sys.exit("Tidak ada data.")
-
     out = Path(args.out).expanduser() if args.out else (
         OUT_DIR / f"yt_channels_{datetime.now():%Y%m%d_%H%M}.csv")
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    # CSV ditulis bertahap: tiap video langsung disimpan dan di-flush ke disk,
+    # jadi kalau proses dihentikan di tengah (Ctrl-C, rate limit, mati listrik)
+    # hasil yang sudah terkumpul tetap ada.
+    all_rows, transcripts, collected = [], {}, []
     with out.open("w", newline="", encoding="utf-8-sig") as f:  # BOM: Excel-friendly
-        w = csv.DictWriter(f, fieldnames=COLUMNS)
-        w.writeheader()
-        w.writerows(all_rows)
+        writer = csv.DictWriter(f, fieldnames=COLUMNS)
+        writer.writeheader()
+        f.flush()
+
+        def sink(row):
+            writer.writerow(row)
+            f.flush()
+
+        try:
+            for url in urls:
+                try:
+                    all_rows += scrape_channel(url, args, transcripts,
+                                               collected, sink)
+                except Exception as exc:
+                    print(f"  channel gagal ({url}): {str(exc)[:70]}",
+                          file=sys.stderr)
+        except KeyboardInterrupt:
+            print(f"\nDihentikan — {len(all_rows)} video tersimpan di {out}",
+                  file=sys.stderr)
+            raise SystemExit(130)
+
+    if not all_rows:
+        out.unlink(missing_ok=True)     # hanya header, tak ada gunanya
+        sys.exit("Tidak ada data.")
 
     print(f"\n{len(all_rows)} video -> {out}", file=sys.stderr)
     if transcripts:
