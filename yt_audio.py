@@ -16,9 +16,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Ambang jeda: -30dB cukup longgar untuk menangkap napas antar kalimat tanpa
-# ikut menghitung musik latar yang pelan.
-SILENCE_DB = -30
+# Ambang jeda dihitung RELATIF terhadap loudness video, bukan angka mutlak.
+#
+# Ambang mutlak -30 dB terbukti bias: makin pelan sebuah video di-master, makin
+# banyak "jeda" yang terdeteksi, karena bagian bicara yang lirih ikut jatuh di
+# bawah ambang. Terukur pada lima video referensi — mean -17 dB menghasilkan
+# 264 jeda, mean -30 dB menghasilkan 530. Itu artefak pengukuran, bukan beda
+# gaya bicara, dan membuat angka antar video tidak bisa dibandingkan.
+#
+# Relatif = mean_volume + selisih. Bicara normal berada di sekitar mean;
+# jeda sungguhan jatuh jauh di bawahnya.
+SILENCE_BELOW_MEAN = 11     # dB di bawah mean_volume
+SILENCE_DB_FALLBACK = -30   # dipakai hanya kalau mean gagal diukur
 SILENCE_MIN = 0.35
 YT_TARGET_LUFS = -14.0     # target normalisasi YouTube
 
@@ -69,10 +78,18 @@ def measure_volume(video):
     return {"mean": grab("mean_volume"), "max": grab("max_volume")}
 
 
-def measure_pauses(video):
-    """Jeda bicara -> [(mulai, durasi)]."""
+def silence_threshold(mean_db):
+    """Ambang hening untuk video ini, relatif terhadap loudness-nya."""
+    if mean_db is None:
+        return SILENCE_DB_FALLBACK
+    return round(mean_db - SILENCE_BELOW_MEAN, 1)
+
+
+def measure_pauses(video, mean_db=None):
+    """Jeda bicara -> [(mulai, durasi)]. Ambang menyesuaikan loudness video."""
+    thr = silence_threshold(mean_db)
     err = run(["ffmpeg", "-hide_banner", "-i", str(video),
-               "-af", f"silencedetect=noise={SILENCE_DB}dB:d={SILENCE_MIN}",
+               "-af", f"silencedetect=noise={thr}dB:d={SILENCE_MIN}",
                "-f", "null", "-"])
     starts = [float(m) for m in re.findall(r"silence_start:\s*(-?[\d.]+)", err)]
     durs = [float(m) for m in re.findall(r"silence_duration:\s*([\d.]+)", err)]
@@ -394,7 +411,7 @@ def main():
     vol = measure_volume(video)
 
     print("Deteksi jeda bicara...", file=sys.stderr)
-    pauses = measure_pauses(video)
+    pauses = measure_pauses(video, vol.get("mean"))
     sp = speech_stats(pauses, total)
     print(f"    {sp['count']} jeda, bicara {sp['talk_pct']:.0f}%", file=sys.stderr)
 

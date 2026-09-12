@@ -63,6 +63,35 @@ references/wealth-logic/                     ← kebab-case
 File di dalam folder video (`slides.md`, `audio.md`, `slide_000.jpg`) tidak
 perlu memuat nama video — folder induknya sudah menyebutkan.
 
+### Folder kebab-case, FILE snake_case
+
+| Objek | Gaya | Contoh |
+|---|---|---|
+| Folder topik/channel/video | **kebab-case** (`-`) | `marcus-explains/`, `the-economics-of-nightclubs/` |
+| Semua file hasil tool | **snake_case** (`_`) | `the_economics_of_nightclubs.mp4`, `transcripts_10_popular_wealth_logic.txt` |
+
+Jadi nama file video **sengaja berbeda** dari nama foldernya:
+
+```
+the-economics-of-nightclubs/          ← folder, tanda hubung
+  the_economics_of_nightclubs.mp4     ← file, underscore
+  slides.md
+  audio.md
+```
+
+Aturan ini ditambahkan ke `second-brain/CLAUDE.md` §2 pada 12 Sep 2026, supaya
+berlaku seragam di seluruh vault — bukan cuma di sini.
+
+Berlaku untuk file yang **kita hasilkan sendiri** (unduhan video, thumbnail,
+transcript, CSV). File kiriman orang atau unduhan pihak ketiga tetap memakai
+nama aslinya, sesuai aturan vault yang sudah ada.
+
+**Tanda kurung dibuang.** `Real Estate vs Stocks (The Real Math)` menjadi
+`real_estate_vs_stocks_which_makes_more_money_the_real_math`. Kurung di nama
+file merepotkan shell — kemarin sempat membuat pengukur ketajaman di
+`yt-slides` gagal diam-diam. Folder lama `logical-money/` masih memakai kurung;
+biarkan, file di dalamnya sudah dirapikan.
+
 ---
 
 ## Kondisi tool sekarang vs pola di atas
