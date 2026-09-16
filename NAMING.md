@@ -24,7 +24,7 @@ Terakhir diperbarui: 11 September 2026
 {jenis}_{cakupan}_{channel}.{ext}
 ```
 
-- **jenis** — `transcripts`, `video_data`, `channel_info`
+- **jenis** — `transcripts`, `video_data`, `channel_info`, `analytics`
 - **cakupan** — `all`, atau `{N}_{urutan}` seperti `10_popular`, `5_latest`
 - **channel** — nama channel, lowercase snake_case
 
@@ -37,7 +37,12 @@ video dan urutan apa, tanpa perlu membuka file.
 transcripts_10_popular_wealth_logic.txt
 video_data_10_popular_wealth_logic.csv
 video_data_all_logical_money.csv
+analytics_28d_quick_in_explain.csv        ← channel sendiri, cakupan = periode
+analytics_28d_quick_in_explain.md
 ```
+
+Untuk `analytics` cakupannya **periode**, bukan jumlah video: `28d`, `90d`.
+Yang membedakan dua laporan channel yang sama adalah rentang waktunya.
 
 ### Struktur folder referensi channel
 
@@ -166,3 +171,18 @@ Hanya memengaruhi file baru. File lama tetap seperti sekarang dan tidak rusak:
 - `yt-slides` mencocokkan transcript dari **judul di dalam file**, bukan dari
   nama filenya
 - Tidak ada script yang membaca file berdasarkan pola nama
+
+---
+
+## Analytics channel sendiri
+
+Keluar dari pola `references/` — ini channel milik sendiri, bukan referensi
+kompetitor. Mendarat di `second-brain/0.Inbox/`:
+
+| Tool | Keluaran |
+|---|---|
+| `yt-analytics` | `analytics_{N}d_{channel}.csv` + `.md` |
+| `yt-dashboard` | `youtube_dashboard.html` (semua channel dalam satu halaman) |
+
+Dashboard sengaja satu file yang ditimpa tiap kali — dipakai untuk dilihat
+sekarang, bukan diarsipkan. CSV/markdown `yt-analytics` yang diarsipkan.
