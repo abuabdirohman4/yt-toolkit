@@ -29,10 +29,20 @@ Alias sudah ada di `~/.zshrc`. Terminal baru langsung bisa; terminal yang sedang
 | Command | Masukan | Keluaran |
 |---|---|---|
 | `yt-transcript` | URL playlist / video | `.txt` transcript per paragraf |
+| `yt-stt` | file video / audio **lokal** | `.txt` transcript per paragraf |
 | `yt-channel` | URL channel | `.csv` data video (views, likes, dll) |
+| `yt-download` | URL | file video 720p H.264 |
 | `yt-slides` | file video `.mp4` | folder gambar slide + `slides.md` |
 | `yt-audio` | file video / audio | `audio.md` — kualitas audio + gaya narasi |
-| `yt_download.py` | URL | file video (**belum terbukti jalan**) |
+| `yt-analytics` | channel **sendiri** | `.csv` + `.md` per channel |
+| `yt-dashboard` | channel **sendiri** | satu halaman HTML semua channel |
+
+`yt-transcript` vs `yt-stt` — dua jalan berbeda, bukan pilihan rasa:
+
+- **Sudah ada di YouTube** → `yt-transcript`. Mengunduh caption yang sudah jadi,
+  hitungan detik.
+- **File di laptop** → `yt-stt`. Mendengarkan audionya sendiri (whisper-cpp).
+  Tak perlu mengunggah apa pun — penting untuk materi berbayar atau internal.
 
 ---
 
@@ -221,6 +231,47 @@ Untuk video panjang, nada diukur dari tiga potongan 60 detik yang tersebar (awal
 ### Catatan kalibrasi
 
 Penilaian "variasi nada" dikalibrasi dari narasi penjelas profesional yang terukur di kisaran 35%. Angka itu **wajar**, bukan berlebihan — ambang naif akan salah melabeli narasi normal sebagai "terlalu ekspresif", terutama pada suara rendah di mana simpangan yang sama menghasilkan persentase lebih besar.
+
+---
+
+## `yt-stt` — transcript file lokal
+
+Untuk video/audio yang **tidak ada di YouTube**: rekaman kelas, webinar, meeting,
+voice note. Mendengarkan audionya dengan whisper-cpp, jadi tak ada yang diunggah
+ke mana pun.
+
+```bash
+yt-stt video.mp4
+yt-stt "folder/"                                  # semua media di dalamnya
+yt-stt "folder/" --gabung "modul creatube studio" # + satu file gabungan
+yt-stt video.mp4 --lang en                        # default: id
+```
+
+Sekali pasang:
+
+```bash
+brew install whisper-cpp
+mkdir -p ~/.local/share/whisper-models
+curl -L -o ~/.local/share/whisper-models/ggml-medium.bin \
+  https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin
+```
+
+Kecepatan terukur: 68 menit video → 15 menit proses (0,22x realtime, M-series).
+
+### Yang perlu diketahui sebelum memakai hasilnya
+
+**Nama tool hampir selalu salah tulis.** "Suno", "Creatube", "Mureka" jadi
+"Sunno", "Kreative", "Murica". Ini juga terjadi pada caption otomatis YouTube,
+jadi bukan kelemahan whisper — koreksi manual tak terhindarkan di kedua jalur.
+
+**`--prompt` bukan jalan keluarnya.** Diuji 17 Sep 2026: "ChatGPT" membaik, tapi
+"tahanan"→"Taman" dan "deskripsi"→"dan subjek" ikut rusak. Prompt whisper dibaca
+sebagai kalimat yang baru diucapkan, bukan kamus, jadi model ikut menirunya.
+Sengaja tidak dipasang.
+
+**Video demo layar menghasilkan transkrip tipis.** Terukur di modul Creatube:
+video ceramah ~890 karakter/menit, video demo ~420. Instruksinya ada di layar,
+bukan di ucapan. Pasangkan `yt-slides` untuk video seperti itu.
 
 ---
 

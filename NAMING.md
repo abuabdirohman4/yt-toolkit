@@ -186,3 +186,22 @@ kompetitor. Mendarat di `second-brain/0.Inbox/`:
 
 Dashboard sengaja satu file yang ditimpa tiap kali — dipakai untuk dilihat
 sekarang, bukan diarsipkan. CSV/markdown `yt-analytics` yang diarsipkan.
+
+---
+
+## Transcript file lokal (`yt-stt`)
+
+Sumbernya berkas, bukan channel — jadi namanya ikut **nama berkasnya**, bukan
+pola `{jenis}_{cakupan}_{channel}`:
+
+```
+01 CARA BERLANGGANAN MUREKA AI.mp4  ->  01_cara_berlangganan_mureka_ai.txt
+```
+
+Awalan angka dari nama asli dipertahankan supaya urutan modulnya tidak hilang.
+
+Dengan `--gabung`, file gabungannya kembali ke pola biasa:
+
+```
+transcripts_12_modul_creatube_studio.txt
+```
